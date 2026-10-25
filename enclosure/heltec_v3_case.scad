@@ -27,7 +27,9 @@ L        = 50.2;   // Länge (Datenblatt)
 W        = 25.5;   // Breite (Datenblatt)
 pcb_t    = 1.6;    // Platinendicke
 under    = 4.0;    // Platz unter der Platine: Bauteile Rückseite 3,6 mm (ohne Stiftleisten)
-above    = 6.5;    // Raum über der Platinenoberseite: Display 5,0 + Luft; Lippenunterkante bleibt >= 2 mm über der Platine
+disp_h   = 5.0;    // Display-Oberkante über der Platinenoberseite (Datenblatt: 10,2 - 3,6 - 1,6)
+disp_gap = 0.3;    // Luft zwischen Displayglas und Deckelunterseite (Deckel schließt dicht über dem Display ab)
+above    = disp_h + disp_gap;
 
 // ---- Öffnungen -------------------------------------------------------------------------------
 // USB-C an der linken Schmalseite, Mitte (Stecker ragt ~0,9 mm über die Platine hinaus). Cutout größer als der
@@ -41,6 +43,7 @@ usb_cut_h = 8;
 // (y hoch) aus der Mitte verschoben, also rechts von der Platinenmitte (25,1) und nicht mittig quer.
 oled_x = 31.0;   oled_y = 14.75;
 oled_w = 24.5;   oled_h = 14.0;      // Fenster = aktive Fläche + je 1 mm
+win_bevel = 0.8;                     // Fase an der Außenseite
 
 // Buttons PRG (oben, y hoch) und RST (unten) links neben dem USB-C. Positionen aus dem Foto, Mitte des Tasters.
 btn_prg = [3.7, 20.8];
@@ -67,18 +70,25 @@ ant_cut_w = 16;           // Lippenausschnitt am Antennenende
 // ---- Gehäuse ---------------------------------------------------------------------------------
 wall    = 2.4;
 floor_t = 2.0;
-lid_t   = 2.4;
+lid_t   = 2.0;
 clear   = 0.4;             // Luft um die Platine
 
 // ---- Klick-Verschluss ----------------------------------------------------------------------------
 lip_t   = 1.0;             // Wandstärke der Deckellippe (PETG: nicht dünner)
-lip_h   = 4.5;             // Lippenhöhe; Unterkante bleibt >= 1,5 mm über der Platine
+lip_h   = 4.5;             // Lippenhöhe; Unterkante bleibt ~0,8 mm über der Platine
 lip_gap = 0.2;             // Spiel Lippe <-> Wannenwand
 snap    = 0.4;             // Rasthöhe der Nase
 tab_len = 16;              // Länge des Schnapparms (mittig auf beiden Längsseiten)
 slit    = 1.0;             // Schlitz links/rechts vom Schnapparm
 pull_w  = 14;  pull_x = 20;  // Griffzunge: Breite, Versatz aus der Mitte (an der +y-Längsseite)
 pull_out = 4;
+
+// ---- Auflage und Anschlag ------------------------------------------------------------------------
+rail_w   = 1.5;            // Auflageleiste unter den Längskanten der Platine
+stop_w   = 8.5;            // Anschlag: Breite ab Wand/Platinenkante; in der Mitte bleiben W - 2*stop_w frei
+stop_l   = 3.0;
+stop_gap = 0.1;            // Spiel Platinenende <-> Anschlag
+stop_h   = under + pcb_t + 0.6;   // 0,6 mm über der Platinenoberseite; bleibt unter der Deckellippe (Unterkante 0,8 mm über der Platine)
 
 // abgeleitet
 inner_h = under + pcb_t + above;
@@ -112,11 +122,15 @@ module base() {
     union() {
       difference() {
         linear_extrude(out_h) rrect(out_l, out_w, 3);
-        translate([wall, wall, floor_t]) linear_extrude(inner_h + eps) rrect(in_l, in_w, 1.5);
+        translate([wall, wall, floor_t]) linear_extrude(inner_h + eps) rrect(in_l, in_w, 1.0);
       }
-      // Auflagepads unter den vier Platinenecken (klar von den Stiftleisten)
-      for (px = [0, L-1.8], py = [0, W-3])
-        translate([bx + px, by + py, floor_t - eps]) cube([1.8, 3, under + eps]);
+      // Auflageleisten unter beiden Längskanten der Platine (Randzone, auf der Rückseite frei von Bauteilen: prüfen)
+      for (py = [0, W - rail_w])
+        translate([bx, by + py, floor_t - eps]) cube([L, rail_w, under + eps]);
+      // Anschlag am Antennenende: hält die Platine beim Einstecken des USB-Steckers; Mitte bleibt für den IPEX-Pigtail frei
+      for (y0 = [wall, by + W - stop_w])
+        translate([bx + L + stop_gap, y0, floor_t - eps])
+          cube([stop_l, stop_w + clear, stop_h + eps]);
     }
     end_cuts();
     // Rastnuten innen an beiden Längswänden, etwas länger als der Schnapparm
@@ -149,9 +163,12 @@ module lid_body() {
           translate([tx0, ox, groove_z]) rotate([90, 0, 90]) linear_extrude(tab_len)
             polygon([[0.0, 0.0], [-snap, 0.5], [-snap, 1.0], [0.0, 1.5]]);
       // Andruckfinger: verlängern die Lippe an den Längsrändern bis auf die Platinenkante (freie Randzone)
-      for (fx = [7, 41], y = [by - lip_gap, by + W - 1.2])
+      for (fx = [7, 46], y = [by - lip_gap, by + W - 1.2])
         translate([bx + fx, y, ztop + 0.2]) cube([3, 1.4, out_h - ztop - 0.2 + eps]);
     }
+    // Lippe an den Tastern freistellen (Taster stehen nahe der linken Wand)
+    for (b = [btn_rst, btn_prg])
+      translate([ox - eps, by + b[1] - 3.5, out_h - lip_h - eps]) cube([lip_t + 3.5, 7, lip_h]);
     // Schlitze neben dem Schnapparm, damit er federt
     for (x = [tx0 - slit, tx0 + tab_len], y = [ox - eps, out_w - ox - lip_t - eps])
       translate([x, y, out_h - lip_h - eps]) cube([slit, lip_t + 2*eps, lip_h + eps]);
@@ -160,8 +177,15 @@ module lid_body() {
     translate([out_l - wall - lip_gap - lip_t - 0.5, by + sma_y - ant_cut_w/2, out_h - lip_h - 1])
       cube([lip_t + lip_gap + 0.6, ant_cut_w, lip_h + 1.5]);
     // Displayfenster, Button-Löcher
+    // Fenster mit Fase außen (Blickwinkel)
     translate([bx + oled_x - oled_w/2, by + oled_y - oled_h/2, out_h - eps])
-      cube([oled_w, oled_h, lid_t + 1]);
+      cube([oled_w, oled_h, lid_t - win_bevel + eps]);
+    hull() {
+      translate([bx + oled_x - oled_w/2, by + oled_y - oled_h/2, out_h + lid_t - win_bevel - eps])
+        cube([oled_w, oled_h, eps]);
+      translate([bx + oled_x - oled_w/2 - win_bevel, by + oled_y - oled_h/2 - win_bevel, out_h + lid_t])
+        cube([oled_w + 2*win_bevel, oled_h + 2*win_bevel, 1]);
+    }
     // Federtasten: Schlitz um Scheibe und Arm durch den Deckel, Unterseite im Bereich von Scheibe und Arm auf btn_thin gedünnt
     for (b = [btn_rst, btn_prg]) {
       translate([bx + b[0], by + b[1], out_h - eps]) linear_extrude(lid_t + 2*eps) btn_slot2d();
@@ -189,8 +213,12 @@ module lid_assembled() {
 }
 
 // Deckel zum Drucken: Außenseite nach unten, Lippe zeigt nach oben
+// Drehung um die x-Achse (kein Spiegeln!): so dreht man den gedruckten Deckel auch von Hand um.
+module flip_lid() {
+  translate([0, out_w, lid_t]) rotate([180, 0, 0]) translate([0, 0, -out_h]) children();
+}
 module lid() {
-  translate([0, 0, lid_t]) mirror([0, 0, 1]) translate([0, 0, -out_h]) lid_assembled();
+  flip_lid() lid_assembled();
 }
 
 // Prüfplatte: Umriss der Platine + alle Öffnungen, 1,2 mm dick, auf die Platine legen.
@@ -210,9 +238,40 @@ module template() {
   }
 }
 
+// Prüfmodell der Platine mit Bauteilen (Maximalmaße) für die Kollisionsprüfung.
+// chk wählt ein Bauteil: 0 alle, 1 Platine, 2 Display, 3 Taster, 4 USB-C, 5 IPEX
+chk = 0;
+module board_model() {
+  if (chk == 0 || chk == 1) translate([bx, by, bz]) cube([L, W, pcb_t]);
+  // Displaymodul (Glas inkl. Rahmen, großzügig) bis disp_h über der Platine
+  if (chk == 0 || chk == 2) translate([bx + oled_x - 13.5, by + oled_y - 9.75, ztop]) cube([27, 19.5, disp_h]);
+  // Taster
+  if (chk == 0 || chk == 3) for (b = [btn_rst, btn_prg]) translate([bx + b[0] - 3, by + b[1] - 2, ztop]) cube([6, 4, sw_top]);
+  // USB-C-Buchse, ragt 0,9 mm über die Platine hinaus
+  if (chk == 0 || chk == 4) translate([bx - 0.9, by + usb_y - 4.5, ztop]) cube([9, 9, 3.2]);
+  // IPEX-Buchse mit Stecker und Kabel Richtung Antennenhohlraum
+  if (chk == 0 || chk == 5) translate([bx + L - 4, by + sma_y - 1.5, ztop]) cube([4, 3, 2]);
+}
+
+// Teilstücke zum Anprobieren der Details mit der echten Platine
+slices = [[0, 26], [26, 47], [47, 1000]];
+slice_id = 0;
+module sliced(id) {
+  intersection() {
+    children();
+    translate([slices[id][0], -10, -10]) cube([slices[id][1] - slices[id][0], out_w + 30, 60]);
+  }
+}
+
 if (part == "base") base();
 else if (part == "lid") lid();
 else if (part == "template") template();
+else if (part == "test_base") sliced(slice_id) base();
+else if (part == "test_lid") flip_lid() sliced(slice_id) lid_assembled();
+else if (part == "check_base") intersection() { board_model(); base(); }
+else if (part == "check_lid") intersection() { board_model(); lid_assembled(); }
+else if (part == "check_fit") intersection() { base(); lid_assembled(); }
+else if (part == "check_flip") difference() { lid_assembled(); flip_lid() import("lid.stl"); }
 else {
   difference() {
     union() {

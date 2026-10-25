@@ -1,6 +1,6 @@
 # Gehäuse Heltec WiFi LoRa 32 V3
 
-`heltec_v3_case.scad` (OpenSCAD, parametrisch) mit vorgerenderten `base.stl`, `lid.stl`, `template.stl`.
+`heltec_v3_case.scad` (OpenSCAD, parametrisch) mit vorgerenderten `base.stl`, `lid.stl`, `template.stl` und Teststücken `test_{A,B,C}_{base,lid}.stl`.
 
 ## Maße der Platine (Quelle: Heltec-Datenblatt HTIT-WB32LA_V3.2, Kap. 4, und V3.2-Pinmap)
 
@@ -27,9 +27,24 @@ bei Abweichungen die Parameter oben in der `.scad`-Datei ändern.
   Hohlraum für die SMA-Mutter und den Bogen des IPEX-Pigtails.
 - **Deckel nur geklickt, ohne Schrauben:** Eine Lippe im Deckel greift in die Wanne, zwei Schnapparme (je eine Längsseite) rasten
   in Nuten. Zum Öffnen die Griffzunge an der einen Längsseite mit dem Fingernagel nach oben ziehen, kein Werkzeug nötig.
-- Keine Laschen oder Schraublöcher; zur Wandmontage doppelseitiges Klebeband oder Klett auf die Rückseite. Die Platine liegt auf vier Pads und wird oben von vier Fingern an den Längsrändern leicht niedergehalten.
+- Keine Laschen oder Schraublöcher; zur Wandmontage doppelseitiges Klebeband oder Klett auf die Rückseite. Die Platine liegt auf zwei Leisten unter den Längskanten (1,5 mm breit; die Rückseite ist dort frei von Bauteilen, bitte beim Anprobieren prüfen), hat am Antennenende einen Anschlag (beim Einstecken des USB-Steckers schiebt sich die Platine sonst weg) und wird oben von vier Fingern an den Längsrändern leicht niedergehalten.
+- **Höhe:** Das Displayglas steht 5,0 mm über der Platine; der Deckel liegt 0,3 mm darüber (`disp_gap`). Das Fenster hat außen eine Fase für den Blickwinkel.
 
 Druck: Wanne mit der Öffnung nach oben, Deckel mit der Außenseite nach unten (so exportiert), PETG, 0,2 mm Layer. Die Schnapparme
 sind 1 mm dick und 4,5 mm lang: PETG federt, PLA bricht leicht. Ist der Deckel zu fest oder zu lose, `snap` (Rasthöhe, 0,4) und
 `lip_gap` (0,2) anpassen. Die Flexarme der Tasten (1,2 mm dick) halten in PETG; Pressen sie zu hart oder zu weich, `btn_thin` ändern. Nicht wasserdicht (kein Dichtring); für die
 Garage innen gedacht.
+
+
+## Teststücke (zuerst drucken, ~10 Minuten je Paar)
+
+Jedes Paar besteht aus Wannen- und Deckelstück desselben x-Bereichs; die echte Platine einlegen, Deckel aufklicken:
+
+| Paar | x-Bereich | Prüft |
+|---|---|---|
+| A | 0-26 mm | USB-C-Öffnung, Tasten PRG/RST (`sw_top`, Nippel, Federarm), Auflageleisten |
+| B | 26-47 mm | Höhe über dem Display (Fenster, 0,3 mm Luft), Schnapparm und Rastnut |
+| C | 47-73,8 mm | Anschlag am Platinenende, SMA-Bohrung, Antennenhohlraum, Griffzunge |
+
+Mit OpenSCAD geprüft (`part="check_base"` / `"check_lid"` / `"check_fit"`): keine Kollision von Platine, Display, Tastern, USB-C und
+IPEX mit Wanne und Deckel (Maximalmaße), Wanne und Deckel überschneiden sich nirgends. Das Gehäuse selbst ist damit noch nicht am echten Bauteil getestet.
