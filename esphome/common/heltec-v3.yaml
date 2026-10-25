@@ -1,0 +1,48 @@
+# Shared Heltec WiFi LoRa 32 V3 hardware: board, radio, OLED, supply voltage.
+# ESPHome is pinned to 2026.9.0 for both nodes (matched pair, see README).
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+# The CP2102 bridge on this board is wired to UART0, not the S3's native USB.
+logger:
+  hardware_uart: UART0
+
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# TCXO and RF switch settings are mandatory on this board: without them the
+# radio initialises but never transmits, which looks exactly like a range problem.
+sx126x:
+  id: radio
+  cs_pin: GPIO8
+  rst_pin: GPIO12
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  hw_version: sx1262
+  rf_switch: true
+  tcxo_voltage: 1_8V
+  tcxo_delay: 5ms
+  modulation: LORA
+  frequency: 868.2MHz
+  bandwidth: 125_0kHz
+  spreading_factor: 7
+  coding_rate: CR_4_5
+  sync_value: [0x14, 0x24]
+  crc_enable: true
+  pa_power: 0
+
+i2c:
+  sda: GPIO17
+  scl: GPIO18
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 11

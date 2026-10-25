@@ -1,0 +1,226 @@
+# Garage node: reed contact -> encrypted LoRa broadcast. No WiFi station, no API, no MQTT.
+substitutions:
+  name: garage-node
+
+esphome:
+  name: ${name}
+  friendly_name: Garage Node
+  on_boot:
+    # Vext (OLED power, active low) must be on before the I2C bus is set up.
+    - priority: 1100
+      then:
+        - lambda: |-
+            gpio_set_direction(GPIO_NUM_36, GPIO_MODE_OUTPUT);
+            gpio_set_level(GPIO_NUM_36, 0);
+            // Release the OLED reset line and give the panel time to power up.
+            gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
+            gpio_set_level(GPIO_NUM_21, 1);
+            delay(50);
+    - priority: 800
+      then:
+        - output.turn_on: vbat_ctrl
+
+packages:
+  hw: !include common/heltec-v3.yaml
+
+# Access-point-only: with no station network configured, ESPHome's
+# reboot_timeout (station mode only) can never fire.
+wifi:
+  ap:
+    ssid: "garage-node"
+    password: !secret garage_ap_password
+
+ota:
+  - platform: esphome
+    password: !secret garage_ota_password
+  # Browser upload at the AP address, so a phone suffices (design D9).
+  - platform: web_server
+
+# Boot-loop recovery: after repeated failed boots the node comes up with AP + OTA only.
+safe_mode:
+
+# Browser-based firmware upload at the AP address, so a phone suffices.
+web_server:
+  port: 80
+  version: 3
+  auth:
+    username: admin
+    password: !secret garage_ota_password
+
+globals:
+  - id: last_event_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: last_ping_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: wake_ms
+    type: uint32_t
+    initial_value: "0"
+
+sx126x:
+  id: radio
+  pa_power: 0
+  on_packet:
+    then:
+      - lambda: id(last_ping_ms) = millis();
+
+output:
+  - platform: gpio
+    id: vbat_ctrl
+    pin: GPIO37
+
+binary_sensor:
+  # Raw, debounced contact. Internal: only the rate-limited `door` is broadcast.
+  - platform: gpio
+    id: reed_raw
+    internal: true
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_state:
+      then:
+        # Redraw at once; the 1 s display interval would lag the contact by up to a second.
+        - component.update: oled
+        - script.execute: publish_door
+
+  # PRG button wakes the display only; nothing here powers the device down.
+  - platform: gpio
+    id: prg_button
+    internal: true
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      then:
+        - lambda: |-
+            id(wake_ms) = millis();
+            ESP_LOGI("prg", "PRG pressed: display awake for 30 s");
+
+  # Contact closed (magnet present) -> pin LOW -> OFF -> garage_door "closed". Bench: no magnet reads HIGH.
+  - platform: template
+    id: door
+    name: "Garage Door"
+    device_class: garage_door
+    on_state:
+      then:
+        - component.update: oled
+
+# Minimum interval between event-driven broadcasts (airtime backstop for a chattering reed).
+script:
+  - id: publish_door
+    mode: single
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          if (!id(door).has_state() || now - id(last_event_ms) >= 3000) {
+            ESP_LOGI("door", "publish %d", id(reed_raw).state);
+            id(door).publish_state(id(reed_raw).state);
+            id(last_event_ms) = now;
+          }
+
+interval:
+  # Publish the first state after boot, and reconcile a throttled change as soon as the
+  # minimum interval has elapsed.
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (!id(reed_raw).has_state()) return;
+          if (!id(door).has_state()) {
+            id(door).publish_state(id(reed_raw).state);
+            id(last_event_ms) = millis();
+          } else if (id(door).state != id(reed_raw).state && millis() - id(last_event_ms) >= 3000) {
+            id(door).publish_state(id(reed_raw).state);
+            id(last_event_ms) = millis();
+          }
+
+sensor:
+  - platform: uptime
+    id: uptime_s
+    name: "Garage Node Uptime"
+    entity_category: diagnostic
+  # packet_transport carries numbers only: 0 power-on, 1 software, 2 brownout, 3 watchdog, 4 deep-sleep wake, 9 other.
+  # Published once (on_value of the reason text); re-publishing would trigger an extra radio packet each time.
+  - platform: template
+    id: reset_code
+    internal: true
+    update_interval: never
+  - platform: adc
+    id: supply_v
+    pin: GPIO1
+    name: "Garage Node Supply Voltage"
+    attenuation: 12db
+    update_interval: 30s
+    entity_category: diagnostic
+    filters:
+      - multiply: 4.9
+      # Every published change is an immediate radio packet; ADC noise must not become airtime.
+      - delta: 0.2
+
+debug:
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Garage Node Reset Reason"
+      id: reset_reason
+      entity_category: diagnostic
+      on_value:
+        then:
+          - sensor.template.publish:
+              id: reset_code
+              state: !lambda |-
+                std::string r = x;
+                for (auto &c : r) c = tolower(c);
+                if (r.find("power") != std::string::npos) return 0;
+                if (r.find("software") != std::string::npos || r.find("restart") != std::string::npos) return 1;
+                if (r.find("brown") != std::string::npos) return 2;
+                if (r.find("watchdog") != std::string::npos || r.find("wdt") != std::string::npos) return 3;
+                if (r.find("deep") != std::string::npos) return 4;
+                return 9;
+
+packet_transport:
+  - platform: sx126x
+    sx126x_id: radio
+    update_interval: 20s
+    encryption: !secret lora_key
+    rolling_code_enable: true
+    ping_pong_enable: true
+    providers:
+      - name: base-node
+        encryption: !secret lora_key
+    binary_sensors:
+      - id: door
+        broadcast_id: d
+    sensors:
+      - id: uptime_s
+        broadcast_id: u
+      - id: supply_v
+        broadcast_id: v
+      - id: reset_code
+        broadcast_id: r
+
+display:
+  - platform: ssd1306_i2c
+    id: oled
+    model: "SSD1306 128x64"
+    reset_pin: GPIO21
+    address: 0x3C
+    update_interval: 1s
+    lambda: |-
+      // Burn-in mitigation: blank every other 5-minute slot; PRG button wakes it for 30 s.
+      const uint32_t now = millis();
+      const bool awake = ((now / 300000) % 2 == 0) || (now - id(wake_ms) < 30000);
+      if (!awake) return;
+      const int dy = (now / 60000) % 4;  // shift content 0-3 px every minute
+      // Reed = live contact; Sent = last state handed to the radio (lags while rate-limited).
+      const bool pending = id(door).has_state() && id(door).state != id(reed_raw).state;
+      it.printf(0, dy, id(font_small), "Reed: %s", !id(reed_raw).has_state() ? "?" : (id(reed_raw).state ? "OPEN" : "CLOSED"));
+      it.printf(0, 12 + dy, id(font_small), "Sent: %s%s", !id(door).has_state() ? "?" : (id(door).state ? "OPEN" : "CLOSED"), pending ? " (wait)" : "");
+      it.printf(0, 24 + dy, id(font_small), "Up: %us", (unsigned) (now / 1000));
+      it.printf(0, 36 + dy, id(font_small), "Ping rx: %us ago", (unsigned) ((now - id(last_ping_ms)) / 1000));
+      it.printf(0, 48 + dy, id(font_small), "AP: up  V: %.2f", id(supply_v).state);

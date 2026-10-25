@@ -1,0 +1,4 @@
+.DS_Store
+.claude/
+esphome/secrets.yaml
+esphome/.esphome/

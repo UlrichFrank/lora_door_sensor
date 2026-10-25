@@ -1,0 +1,259 @@
+# Base node: LoRa consumer in the house -> MQTT -> Home Assistant.
+substitutions:
+  name: base-node
+
+esphome:
+  name: ${name}
+  friendly_name: Garage Door Base
+  # Vext (OLED power, active low) must be on before the I2C bus is set up.
+  on_boot:
+    priority: 1100
+    then:
+      - lambda: |-
+          gpio_set_direction(GPIO_NUM_36, GPIO_MODE_OUTPUT);
+          gpio_set_level(GPIO_NUM_36, 0);
+          // Release the OLED reset line and give the panel time to power up.
+          gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
+          gpio_set_level(GPIO_NUM_21, 1);
+          delay(50);
+
+packages:
+  hw: !include common/heltec-v3.yaml
+
+# Quiet by default (also on UART); raised at runtime via garage/debug/set, see the mqtt block.
+logger:
+  level: DEBUG
+  initial_level: WARN
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  reboot_timeout: 0s  # an unreachable network must never restart the node
+
+ota:
+  - platform: esphome
+    password: !secret base_ota_password
+
+safe_mode:
+
+# Topic tree follows home-new (docs/topic-tree.md): own root `garage`, flat topics, JSON payloads,
+# all retained. Entities are internal (no per-entity topics, no HA discovery); the JSON topics below
+# are published explicitly:
+#   garage/door    {"state":"open"|"closed"}
+#   garage/link    {"up":bool,"rssi":dBm,"snr":dB}        (on every received frame / link change)
+#   garage/node    {"uptime":s,"supply_voltage":V,"reset_reason":str}   (when the garage node reports)
+#   garage/status  online|offline                           (birth/will of this base node)
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: garage-base-node
+  topic_prefix: garage
+  reboot_timeout: 0s
+  discovery: false
+  # Logging to MQTT is off until switched on at runtime: publish `debug`, `info` or `warn` (retain off)
+  # to garage/debug/set; the lines then appear on garage/debug. `warn` turns it back down. After a
+  # reboot the node is at `warn` again.
+  log_topic:
+    topic: garage/debug
+    level: DEBUG
+    retain: false
+  on_message:
+    - topic: garage/debug/set
+      payload: debug
+      then:
+        - logger.set_level:
+            level: DEBUG
+    - topic: garage/debug/set
+      payload: info
+      then:
+        - logger.set_level:
+            level: INFO
+    - topic: garage/debug/set
+      payload: warn
+      then:
+        - logger.set_level:
+            level: WARN
+  birth_message:
+    topic: garage/status
+    payload: online
+    retain: true
+  will_message:
+    topic: garage/status
+    payload: offline
+    retain: true
+
+globals:
+  - id: last_rx_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: wake_ms
+    type: uint32_t
+    initial_value: "0"
+
+sx126x:
+  id: radio
+  pa_power: 0
+  on_packet:
+    then:
+      - lambda: |-
+          id(last_rx_ms) = millis();
+          ESP_LOGD("rx", "len=%u rssi=%.0f snr=%.1f", (unsigned) x.size(), rssi, snr);
+          id(link_rssi).publish_state(rssi);
+          id(link_snr).publish_state(snr);
+      - script.execute: publish_link
+
+packet_transport:
+  - platform: sx126x
+    sx126x_id: radio
+    ping_pong_enable: true
+    ping_pong_recycle_time: 45s
+    providers:
+      - name: garage-node
+        encryption: !secret lora_key
+
+binary_sensor:
+  - platform: packet_transport
+    provider: garage-node
+    id: door
+    remote_id: d
+    name: "Garage Door"
+    internal: true
+    device_class: garage_door
+    on_state:
+      then:
+        - script.execute: publish_door
+  - platform: packet_transport
+    type: status
+    provider: garage-node
+    id: garage_link
+    name: "Garage Link"
+    internal: true
+    availability:  # deliberately ungated: it reports "disconnected", never "unavailable"
+    on_state:
+      then:
+        - script.execute: publish_link
+  # PRG button wakes the display only; nothing here powers the device down.
+  - platform: gpio
+    id: prg_button
+    internal: true
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      then:
+        - lambda: |-
+            id(wake_ms) = millis();
+            ESP_LOGI("prg", "PRG pressed: display awake for 30 s");
+
+script:
+  # Also re-run with every node report: an on_state that fires before MQTT is connected would
+  # otherwise be lost for good (the state does not change again), leaving garage/door empty.
+  - id: publish_door
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(door).has_state();'
+          then:
+            - mqtt.publish_json:
+                topic: garage/door
+                retain: true
+                payload: |-
+                  root["state"] = id(door).state ? "open" : "closed";
+  - id: publish_link
+    mode: restart
+    then:
+      - mqtt.publish_json:
+          topic: garage/link
+          retain: true
+          payload: |-
+            root["up"] = id(garage_link).state;
+            if (id(link_rssi).has_state()) root["rssi"] = id(link_rssi).state;
+            if (id(link_snr).has_state()) root["snr"] = id(link_snr).state;
+  - id: publish_node
+    mode: restart
+    then:
+      - script.execute: publish_door
+      - mqtt.publish_json:
+          topic: garage/node
+          retain: true
+          payload: |-
+            root["uptime"] = id(garage_uptime).state;
+            if (id(garage_supply).has_state()) root["supply_voltage"] = id(garage_supply).state;
+            if (id(garage_reset_reason).has_state()) root["reset_reason"] = id(garage_reset_reason).state;
+
+sensor:
+  - platform: packet_transport
+    provider: garage-node
+    id: garage_uptime
+    remote_id: u
+    name: "Garage Node Uptime"
+    internal: true
+    unit_of_measurement: s
+    on_value:
+      then:
+        - script.execute: publish_node
+  - platform: packet_transport
+    provider: garage-node
+    id: garage_supply
+    remote_id: v
+    name: "Garage Node Supply Voltage"
+    internal: true
+    unit_of_measurement: V
+    accuracy_decimals: 2
+  # Per-packet link quality from the radio, published for every received frame.
+  - platform: template
+    id: link_rssi
+    name: "Garage Link RSSI"
+    internal: true
+    unit_of_measurement: dBm
+    update_interval: never
+  - platform: template
+    id: link_snr
+    name: "Garage Link SNR"
+    internal: true
+    unit_of_measurement: dB
+    update_interval: never
+  - platform: packet_transport
+    provider: garage-node
+    id: garage_reset_code
+    remote_id: r
+    internal: true
+    on_value:
+      then:
+        - text_sensor.template.publish:
+            id: garage_reset_reason
+            state: !lambda |-
+              switch ((int) x) {
+                case 0: return std::string("power-on");
+                case 1: return std::string("software");
+                case 2: return std::string("brownout");
+                case 3: return std::string("watchdog");
+                case 4: return std::string("deep-sleep");
+                default: return std::string("other");
+              }
+
+text_sensor:
+  - platform: template
+    id: garage_reset_reason
+    name: "Garage Node Reset Reason"
+    internal: true
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    reset_pin: GPIO21
+    address: 0x3C
+    update_interval: 1s
+    lambda: |-
+      // Burn-in mitigation: blank every other 5-minute slot; PRG button wakes it for 30 s.
+      const uint32_t now = millis();
+      const bool awake = ((now / 300000) % 2 == 0) || (now - id(wake_ms) < 30000);
+      if (!awake) return;
+      const int dy = (now / 60000) % 4;  // shift content 0-3 px every minute
+      it.printf(0, dy, id(font_small), "Door: %s", !id(door).has_state() ? "?" : (id(door).state ? "OPEN" : "CLOSED"));
+      it.printf(0, 14 + dy, id(font_small), "Last rx: %us ago", (unsigned) ((now - id(last_rx_ms)) / 1000));
+      it.printf(0, 28 + dy, id(font_small), "Link: %s", id(garage_link).state ? "OK" : "LOST");
+      it.printf(0, 42 + dy, id(font_small), "MQTT: %s", esphome::mqtt::global_mqtt_client->is_connected() ? "up" : "down");
