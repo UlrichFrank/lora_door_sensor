@@ -3,7 +3,7 @@
 // Teile:  part = "base" | "lid" | "template" | "assembly"
 //   base      Wanne mit USB-C-Öffnung, SMA-Bohrung für die externe Antenne, Rastnuten
 //   lid       Deckel mit Displayfenster und Button-Löchern; Klick-Verschluss ohne Schrauben,
-//             werkzeuglos zu öffnen (Griffzunge an einer Längsseite nach oben ziehen)
+//             werkzeuglos zu öffnen (Fingernagel in die Mulde der Wanne an einer Längsseite, Deckel anhebeln)
 //   template  dünne Prüfplatte: auf die echte Platine legen, bevor Base/Lid gedruckt werden
 //   assembly  Vorschau, Deckel aufgesetzt, Viertel aufgeschnitten
 //
@@ -26,6 +26,9 @@ eps = 0.01;
 L        = 50.2;   // Länge (Datenblatt)
 W        = 25.5;   // Breite (Datenblatt)
 pcb_t    = 1.6;    // Platinendicke
+edge_l   = 48.0;   // Länge der Platine an den Längskanten (Stiftleistenseite); in der Mitte reicht sie bis L (gemessen)
+edge_in  = (L - edge_l)/2;   // an beiden Enden gleich eingerückt
+edge_nw  = 4.5;    // Breite dieser Eckausschnitte (geschätzt, >= stop_w)
 under    = 4.0;    // Platz unter der Platine: Bauteile Rückseite 3,6 mm (ohne Stiftleisten)
 disp_h   = 5.0;    // Display-Oberkante über der Platinenoberseite (Datenblatt: 10,2 - 3,6 - 1,6)
 disp_gap = 0.3;    // Luft zwischen Displayglas und Deckelunterseite (Deckel schließt dicht über dem Display ab)
@@ -63,8 +66,9 @@ nub_gap     = 0.3;        // Luft zwischen Nippel und Taster
 // in der rechten Schmalseite. Rechts der Platine liegt ein Hohlraum für die SMA-Mutter und den Pigtail-Bogen.
 sma_d    = 6.6;
 sma_y    = W/2;
-sma_z    = 3.0;
-ant_zone = 18;            // Hohlraum rechts der Platine (Kabelbogen)
+sma_washer_d = 9.5;       // Scheibe/Mutter innen (am Druck gemessen: ragt bei Mitte 10,6 über die Wanne hinaus)
+sma_z    = above - 0.3 - sma_washer_d/2;   // Mitte über der Platinenoberseite: Scheibe bleibt 0,3 mm unter der Wannenkante (kein Deckelausschnitt nötig)
+ant_zone = 24;            // Hohlraum rechts der Platine (Kabelbogen)
 ant_cut_w = 16;           // Lippenausschnitt am Antennenende
 
 // ---- Gehäuse ---------------------------------------------------------------------------------
@@ -80,12 +84,11 @@ lip_gap = 0.2;             // Spiel Lippe <-> Wannenwand
 snap    = 0.4;             // Rasthöhe der Nase
 tab_len = 16;              // Länge des Schnapparms (mittig auf beiden Längsseiten)
 slit    = 1.0;             // Schlitz links/rechts vom Schnapparm
-pull_w  = 14;  pull_x = 20;  // Griffzunge: Breite, Versatz aus der Mitte (an der +y-Längsseite)
-pull_out = 4;
+pull_w  = 14;  pull_x = 20;  // Fingermulde in der Wanne: Breite, Versatz aus der Mitte (an der +y-Längsseite)
 
 // ---- Auflage und Anschlag ------------------------------------------------------------------------
 rail_w   = 1.5;            // Auflageleiste unter den Längskanten der Platine
-stop_w   = 8.5;            // Anschlag: Breite ab Wand/Platinenkante; in der Mitte bleiben W - 2*stop_w frei
+stop_w   = 4.25;           // Anschlag: Breite ab Wand/Platinenkante; in der Mitte bleiben W - 2*stop_w frei (8,5 stand auf der Platine auf)
 stop_l   = 3.0;
 stop_gap = 0.1;            // Spiel Platinenende <-> Anschlag
 stop_h   = under + pcb_t + 0.6;   // 0,6 mm über der Platinenoberseite; bleibt unter der Deckellippe (Unterkante 0,8 mm über der Platine)
@@ -103,6 +106,7 @@ by = wall + clear;
 bz = floor_t + under;                              // Unterseite der Platine
 ztop = bz + pcb_t;                                 // Oberseite der Platine
 groove_z = out_h - lip_h;                          // Höhe der Rastnut (Lippenunterkante)
+
 
 module rrect(l, w, r) {
   translate([r, r]) offset(r) square([l-2*r, w-2*r]);
@@ -126,17 +130,17 @@ module base() {
       }
       // Auflageleisten unter beiden Längskanten der Platine (Randzone, auf der Rückseite frei von Bauteilen: prüfen)
       for (py = [0, W - rail_w])
-        translate([bx, by + py, floor_t - eps]) cube([L, rail_w, under + eps]);
+        translate([bx + edge_in, by + py, floor_t - eps]) cube([edge_l, rail_w, under + eps]);
       // Anschlag am Antennenende: hält die Platine beim Einstecken des USB-Steckers; Mitte bleibt für den IPEX-Pigtail frei
       for (y0 = [wall, by + W - stop_w])
-        translate([bx + L + stop_gap, y0, floor_t - eps])
+        translate([bx + edge_in + edge_l + stop_gap, y0, floor_t - eps])
           cube([stop_l, stop_w + clear, stop_h + eps]);
     }
     end_cuts();
     // Rastnuten innen an beiden Längswänden, etwas länger als der Schnapparm
     for (y = [wall - 0.5, out_w - wall - eps])
       translate([tx0 - 1, y, groove_z]) cube([tab_len + 2, 0.5 + eps, snap + 1.2]);
-    // Fingermulde unter der Griffzunge (Längsseite +y)
+    // Fingermulde zum Abhebeln des Deckels (Längsseite +y; Deckelkante bleibt bündig)
     translate([out_l/2 + pull_x - pull_w/2 - 1, out_w - wall - 0.5, out_h - 3])
       cube([pull_w + 2, wall + 1, 3 + eps]);
   }
@@ -149,8 +153,6 @@ module lid_body() {
   difference() {
     union() {
       translate([0, 0, out_h]) linear_extrude(lid_t) rrect(out_l, out_w, 3);
-      // Griffzunge an der +y-Seite
-      translate([out_l/2 + pull_x - pull_w/2, out_w - 1, out_h]) cube([pull_w, pull_out + 1, lid_t]);
       // Lippe als Ring innerhalb der Wanne
       translate([ox, ox, out_h - lip_h]) linear_extrude(lip_h + eps)
         difference() {
@@ -242,7 +244,11 @@ module template() {
 // chk wählt ein Bauteil: 0 alle, 1 Platine, 2 Display, 3 Taster, 4 USB-C, 5 IPEX
 chk = 0;
 module board_model() {
-  if (chk == 0 || chk == 1) translate([bx, by, bz]) cube([L, W, pcb_t]);
+  if (chk == 0 || chk == 1) difference() {
+    translate([bx, by, bz]) cube([L, W, pcb_t]);
+    for (x0 = [0, L - edge_in], y0 = [0, W - edge_nw])
+      translate([bx + x0 - eps, by + y0 - eps, bz - 1]) cube([edge_in + 2*eps, edge_nw + 2*eps, pcb_t + 2]);
+  }
   // Displaymodul (Glas inkl. Rahmen, großzügig) bis disp_h über der Platine
   if (chk == 0 || chk == 2) translate([bx + oled_x - 13.5, by + oled_y - 9.75, ztop]) cube([27, 19.5, disp_h]);
   // Taster
@@ -254,7 +260,7 @@ module board_model() {
 }
 
 // Teilstücke zum Anprobieren der Details mit der echten Platine
-slices = [[0, 26], [26, 47], [47, 1000]];
+slices = [[0, 26], [26, 50], [50, 1000]];
 slice_id = 0;
 module sliced(id) {
   intersection() {
